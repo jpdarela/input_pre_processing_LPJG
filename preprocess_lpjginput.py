@@ -482,7 +482,9 @@ def main():
     # Finally: write VPD. The order is important here as make_vpd uses items
     # from the preceding loop to process data.
     # The implementation here is dependent on the processing of at least one of the main variables.
+    # It also depends on the presence of hurs & tas
     if "vpd" in enable and len(enable) > 1:
+        assert "tas" in enable and "hurs" in enable, "Need hurs and tas to calculate vpd"
         make_vpd(lat, lon, names, metadata, tm, crs)
 
 if __name__ == "__main__":

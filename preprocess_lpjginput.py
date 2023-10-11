@@ -452,7 +452,7 @@ def main():
     vrstr = [str(v) for v in vrs]
     vrstr = rename_rhs(vrstr)
 
-    enable = ["hurs"]#, "pr", "rsds", "ps", "tas", "wind", "vpd"]
+    enable = ["hurs", "pr", "rsds", "ps", "tas", "wind", "vpd"]
 
     # print(vrstr)
     vrs = [folder_data/Path(v) for v in vrs]

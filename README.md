@@ -1,6 +1,6 @@
 # Preprocessing tool
 
-Transform netCDF4 files (dimensions and attrbutes) to use with LPJ-GUESS.
+Transform netCDF4 files (dimensions and attributes) to use with LPJ-GUESS.
 
 It only works with ISIMIP input files: [ISIMIP Repository](https://data.isimip.org/search/tree/ISIMIP2a/InputData/climate/atmosphere/watch-wfdei/)
 
@@ -13,11 +13,15 @@ USE:
 `$ python ./prepocess_lpjginput.py <region> [optional <plot>]`
 
   `<region> : sa | af | as | eu`
+
   `<plot> : 0 | 1`
 
 sa = South America
+
 af = Central Africa
+
 as = Southeast Asia
+
 eu = Europe
 
 The plot option uses matplolib imshow to plot one layer of the original data (To check the extent)
@@ -40,16 +44,25 @@ WHERE:
 <variable_name> can be one of:
 
     hurs - relative_humidity (%)
-            pr - precipitation flux (kg m-2 s-1)
-            ps - surface_pressure (Pa)
-            rsds - shortwave downwelling radiation (W m-2)
-            tas - air surface temperature (K)
-            wind - (m s-1)
-            vpd - (kPa)
+
+    pr - precipitation flux (kg m-2 s-1)
+
+    ps - surface_pressure (Pa)
+
+    rsds - shortwave downwelling radiation (W m-2)
+
+    tas - air surface temperature (K)
+
+    wind - (m s-1)
+
+    vpd - (kPa)
 
 `<region>` can be one of:
 
     sa - Northern South America
-            af - Central Africa
-            as - Southeastern Asia
-            eu - Europe
+
+    af - Central Africa
+
+    as - Southeastern Asia
+
+    eu - Europe

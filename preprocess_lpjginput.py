@@ -11,7 +11,7 @@ from numpy import float32 as flt
 
 
 """
-    Subsets ISI-MIP2 input files & Generate netCDF files and gridlists
+    Subsets ISIMIP netCDF4 input files & Generate netCDF files with reduced grids (time,gridcell) and gridlists
     for LPJ-GUESS experiments. For the bbox selection look at the definition of
     upper left corner and lower right corner: goto LINE 105
 
@@ -22,18 +22,22 @@ $ python ./prepocess_lpjginput.py <region> [optional <plot>]
   <plot> : 0 | 1
   Look the README.txt
 """
+# Folder containing the ISIMIP netCDF data files (all variables in the same folder)
+WATCH_WFDEI_DATA = Path("../../CAETE-DVM/input/20CRv3-ERA5/obsclim_raw/")
 
-FILE_EXT = "nc4"
+FILE_EXT = "nc"
 ROOT = Path(os.getcwd())
-WATCH_WFDEI_DATA = Path("ISIMIP2a")
-REFERENCES = u"WFDEI Forcing Data converted for ISI-MIP2 (isi-mip@pik-potsdam.de) - 1979-2016. Adapted to LPJ-GUESS"
+DATASET = "20CRv3-ERA5_obsclim"
+TSPAN = "1901-2024"
+REFERENCES = f"{DATASET} (isi-mip@pik-potsdam.de) - {TSPAN}. Adapted to LPJ-GUESS"
+
 
 guess_var_mtdt= {'tas':  ["K", 'air_temperature'],
                  'rsds': ['W m-2', "surface_downwelling_shortwave_flux_in_air"],
                  'vpd':  ["kPa", "vpd"],
                  'ps': ["Pa", "surface_air_pressure"],
                  'pr': ["kg m-2 s-1", "precipitation_flux"],
-                 'wind': ["m s-1", "wind_speed"], # Aparently the same
+                 'sfcwind': ["m s-1", "wind_speed"], # Aparently the same
                  'hurs': ["%", 'relative_humidity']}
 
 try:
@@ -140,7 +144,7 @@ else:
     print(f"WTF is {reg}?")
     reg = "sa"
 
-def Vsat_slope(Tair:array,method=3)->array:
+def Vsat_slope(Tair:array,method=3, esat=True)->array:
 # Translated to python from the bigleaf R package
 
 #' Saturation Vapor Pressure (Esat) and Slope of the Esat Curve
@@ -184,20 +188,21 @@ def Vsat_slope(Tair:array,method=3)->array:
     Pa2kPa = 1e-3
 
   # saturation vapor pressure
-    Esat = a * exp((b * tair_degc) / (c + tair_degc))
-    Esat = Esat * Pa2kPa
+    if esat:
 
-  # slope of the saturation vapor pressure curve
-    Delta = a * (exp((b * tair_degc)/(c + tair_degc)) * (b/(c + tair_degc) - (b * tair_degc)/(c + tair_degc)**2))
-    Delta = Delta * Pa2kPa
+        Esat = a * exp((b * tair_degc) / (c + tair_degc))
+        return Esat * Pa2kPa
 
-    return Esat, Delta
+    # slope of the saturation vapor pressure curve
+    else:
+        Delta = a * (exp((b * tair_degc)/(c + tair_degc)) * (b/(c + tair_degc) - (b * tair_degc)/(c + tair_degc)**2))
+        return Delta * Pa2kPa
 
 def VPD(Tair:array, RH:array)->array:
     """Estimate vpd from Tair (K) and RH (%)"""
-    svp = Vsat_slope(Tair)[0] # (kPa)
+    svp = Vsat_slope(Tair) # (kPa)
     avp = svp * (RH/100.0)
-
+    # invert the signal to fit LPJG purpose
     return -(svp - avp)
 
 def get_nctime(dset:Path=None):
@@ -241,7 +246,7 @@ def get_crs(dset:Path=None):
 def get_metadata(dset:Path, var:str):
     metadata = {}
     if dset is not None:
-        # print(f"Get metadata for {var}")
+        print(f"Get metadata for {var}")
         with Dataset(dset, 'r') as fh:
             tm = fh.variables[var]
             metadata["std_name"] = tm.standard_name
@@ -251,15 +256,18 @@ def get_metadata(dset:Path, var:str):
             metadata["missing_value"] = tm.missing_value
     return metadata
 
-def list_files(path:Path, extension:str)->list:
+def list_files(path:Path, extension:str, var:str|None = None)->list:
     """ """
     os.chdir(path)
     files = sorted([Path(f) for f in os.listdir('.') if f.split('.')[-1] == extension])
     os.chdir(ROOT)
+    if var is not None:
+        files = [Path(os.path.join(path, f)).resolve() for f in files if var in f.name]
+        return files
     files = [Path(os.path.join(path, f)).resolve() for f in files]
     return files
 
-def read_data(dset:Path, var:str)->ma.MaskedArray:
+def read_data(dset:Path, var:str)->ma.MaskedArray: # type: ignore
     with Dataset(dset, 'r') as fh:
         # yield data
         variable = fh.variables[var]
@@ -271,9 +279,11 @@ def crop_rect(var_dir:Path, var:str):
 
     time_data = []
     variable_data = []
-    dt = list_files(var_dir, FILE_EXT)
+    dt = list_files(var_dir, FILE_EXT, "_" + var + "_")
+    # return dt
 
     mtdt = get_metadata(dt[0], var)
+    # return dt, mtdt
     crs = get_crs(dt[0])
 
     print(f"\n\tCollecting files at {dt[0].parent}", end="\n\n")
@@ -302,6 +312,7 @@ def process_var(var_dir:Path, var:str):
     """
     # It means crop rectangle but do other things also
     dt, mt, tm, crs = crop_rect(var_dir, var)
+
     tdim = dt.shape[0] # get time dimension length
     # the standard fill value of the watch+wfdei from ISI-MIP2 is 1e+20
     # Note that the creation of this mask need to be correct for the lat lon merging process
@@ -341,7 +352,7 @@ def process_var(var_dir:Path, var:str):
 
     return lats_idx, lons_idx, station_names, out, mt, tm, crs
 
-def write_gridlist(fname, lat, lon , name):
+def write_gridlist(fname, lat, lon, name):
     # When writing from windows the line ending is \n (Automatic trasform to \r\n)
     endline = "\r\n"
     if platform.system() == "Linux":
@@ -357,7 +368,7 @@ def write_gridlist(fname, lat, lon , name):
 
 def write_files(fname = None,
                var=None,
-               arr=None,
+               arr_in=None,
                metadata=None,
                time=None,
                crs=None,
@@ -367,34 +378,43 @@ def write_files(fname = None,
                reference=None):
 
     if fname is not None:
-        dset = Dataset(os.path.join(Path('./'), fname + "_1979_2016_watch-wfdei.nc"), mode="w", format="NETCDF4")
+        dset = Dataset(os.path.join(Path('./'), fname + ".nc"), mode="w", format="NETCDF4")
 
-
+    arr = arr_in.T
     # Create netCDF dimensions
-    dset.createDimension("station",size=arr.shape[0])
-    dset.createDimension("time",size=time["ndays"])
+    dset.createDimension("station",size=arr.shape[1])
+    # dset.createDimension("time",size=time["ndays"])
+    dset.createDimension("time",size=None)
 
     # Data description
     long_name = metadata["long_name"]
-    dset.description = f"WATCH+WFDEI for LPJ-GUESS - {long_name}"
+    dset.description = f"ISIMIP3a {DATASET} for LPJ-GUESS - {long_name}"
     dset.reference = reference
     dset.featureType = "timeSeries"
 
     # Create netCDF variables
+
     S = dset.createVariable("station", 'i4', ("station",))
     X  = dset.createVariable("lon", 'f4', ("station",), fill_value=metadata["missing_value"])
     Y =  dset.createVariable("lat", 'f4', ("station",), fill_value=metadata["missing_value"])
     SN = dset.createVariable("station_name", '<U6', ("station", ),fill_value="station_y-x")
     T  = dset.createVariable("time", 'f4', ("time",), fill_value=metadata["missing_value"])
-    D  = dset.createVariable(var, 'f4', ("station", "time"), fill_value=1e+20)
+    D  = dset.createVariable(var, 'f4', ("time", "station"), fill_value=1e+20, chunksizes=(time["ndays"], 128))
 
-    S[...] = arange(arr.shape[0], dtype="i4")
+    # transpose to time, station. We want time as the first dimension to enable concatenation in time
+    # Assign data to variables & add attributes
+
+    # station index
+    S[...] = arange(arr.shape[1], dtype="i4")
+
+    # time variable
     T[...] = time['time']
     T.units = time['units']
     T.calendar = time["calendar"]
     T.standard_name = "time"
     T.axis = time["axis"]
 
+    # lon & lat variables
     X[...] = lon
     X.units = crs["lon_units"]
     X.long_name = crs["lon_long_name"]
@@ -407,6 +427,7 @@ def write_files(fname = None,
     Y.standard_name = crs["lat_std_name"]
     Y.axis = crs["lat_axis"]
 
+    # station names
     SN[...] = names
     SN.long_name = "Station-name_ny-nx"
     SN.cf_role = "timeseries_id"
@@ -422,11 +443,10 @@ def write_files(fname = None,
 
     return fname, lat, lon, names
 
-def make_vpd(lat, lon, names, metadata, tm, crs):
+def make_vpd_old(lat, lon, names, metadata, tm, crs):
 
-    ptas = Path(f"./tas_{reg}_1979_2016_watch-wfdei.nc").resolve()
-    phurs  = Path(f"./hurs_{reg}_1979_2016_watch-wfdei.nc").resolve()
-
+    ptas = Path(f"./tas_{reg}_{DATASET}.nc").resolve()
+    phurs  = Path(f"./hurs_{reg}_{DATASET}.nc").resolve()
 
     with Dataset(ptas,  "r")  as tasfh, Dataset(phurs, "r") as hursfh:
         tas_arr = tasfh.variables["tas"][...].data # K
@@ -440,52 +460,107 @@ def make_vpd(lat, lon, names, metadata, tm, crs):
     mtdt["long_name"] = "Vapor Pressure Deficit"
 
     # call write NC
-    write_files(fname=f"vpd_{reg}", var="vpd", arr=vpd, metadata=mtdt,
+    write_files(fname=f"vpd_{reg}_{DATASET}", var="vpd", arr=vpd, metadata=mtdt,
                 time=tm, crs=crs, lat=lat, lon=lon,
                 names=names, reference=REFERENCES)
     return None
 
+def make_vpd():
+    """Calculate VPD from existing tas and hurs files"""
+
+    ptas = Path(f"./tas_{reg}_{DATASET}.nc").resolve()
+    phurs = Path(f"./hurs_{reg}_{DATASET}.nc").resolve()
+
+    # Check if required files exist
+    if not ptas.exists():
+        print(f"Error: {ptas} not found. Need to process 'tas' first.")
+        return None
+    if not phurs.exists():
+        print(f"Error: {phurs} not found. Need to process 'hurs' first.")
+        return None
+
+    print("Calculating VPD from existing tas and hurs files...")
+
+    with Dataset(ptas, "r") as tasfh, Dataset(phurs, "r") as hursfh:
+        # Get all required data from the existing files
+        tas_arr = tasfh.variables["tas"][...]  # Shape: (time, station)
+        hurs_arr = hursfh.variables["hurs"][...]  # Shape: (time, station)
+
+        # Extract spatial metadata from tas file (these should be 1D arrays)
+        lat = tasfh.variables["lat"][...]  # Shape: (station,)
+        lon = tasfh.variables["lon"][...]  # Shape: (station,)
+        names = tasfh.variables["station_name"][...]  # Shape: (station,)
+
+        # Extract time info
+        time_var = tasfh.variables["time"]
+        tm = {
+            "time": time_var[...],
+            "ndays": time_var.size,
+            "units": time_var.units,
+            "calendar": time_var.calendar,
+            "axis": "T"
+        }
+
+        # Extract CRS info from variable attributes
+        lat_var = tasfh.variables["lat"]
+        lon_var = tasfh.variables["lon"]
+        crs = {
+            "lat_units": lat_var.units,
+            "lat_long_name": lat_var.long_name,
+            "lat_std_name": lat_var.standard_name,
+            "lat_axis": "Y",
+            "lon_units": lon_var.units,
+            "lon_long_name": lon_var.long_name,
+            "lon_std_name": lon_var.standard_name,
+            "lon_axis": "X"
+        }
+
+        # Create metadata for VPD with proper data types
+        metadata = {
+            "units": guess_var_mtdt["vpd"][0],
+            "std_name": guess_var_mtdt["vpd"][1],
+            "long_name": "Vapor Pressure Deficit",
+            "fill_value": flt(1e+20),  # Use float32 to match variable type
+            "missing_value": flt(1e+20)  # Use float32 to match variable type
+        }
+
+    # Calculate VPD - tas_arr and hurs_arr should both be (time, station)
+    vpd = VPD(tas_arr, hurs_arr)  # This should return (time, station)
+
+    # Write VPD file - need to transpose vpd to (station, time) for write_files
+    write_files(fname=f"vpd_{reg}_{DATASET}", var="vpd", arr_in=vpd.T, metadata=metadata,
+                time=tm, crs=crs, lat=lat, lon=lon,
+                names=names, reference=REFERENCES)
+
+    print("VPD calculation completed.")
+    return None
+
 def main():
-    folder_data = ROOT/WATCH_WFDEI_DATA
+    folder_data = WATCH_WFDEI_DATA.resolve()
     GRDFLAG = False
-    vrs = [Path(var) for var in os.listdir(path=folder_data) if (folder_data/Path(var)).is_dir()]
-    vrstr = [str(v) for v in vrs]
-    vrstr = rename_rhs(vrstr)
+    vrs = ["hurs", "pr", "rsds", "ps", "tas", "sfcwind"]
+    enable = ["hurs", "pr", "rsds", "ps", "tas", "sfcwind", "vpd"]
 
-    enable = ["hurs", "pr", "rsds", "ps", "tas", "wind", "vpd"]
-
-    # print(vrstr)
-    vrs = [folder_data/Path(v) for v in vrs]
-    # print(vrs)
-    if plot:
-        import matplotlib.pyplot as plt
-        dt = list_files(vrstr[0], FILE_EXT)
-        ds = read_data(dt[0], vrstr[0])
-        a = ds.__next__()
-
-        plt.imshow(a)
-        plt.show()
-
-    for path, var in zip(vrs, vrstr):
-
+    # Process main variables
+    for var in vrs:
+        print(var, end=" ")
         if var in enable:
-            # print(var, path)
-            lat, lon, names, arr, metadata, tm, crs = process_var(path, var)
-            grdlst_data = write_files(f"{var}_{reg}", var, arr, metadata,
+            print("enable")
+            lat, lon, names, arr, metadata, tm, crs = process_var(folder_data, var)
+            grdlst_data = write_files(f"{var}_{reg}_{DATASET}", var, arr, metadata,
                                         tm, crs, lat, lon, names, REFERENCES)
 
             if not GRDFLAG:
                 GRDFLAG = True
                 write_gridlist(*grdlst_data)
-        else: pass
+        else:
+            pass
 
-    # Finally: write VPD. The order is important here as make_vpd uses items
-    # from the preceding loop to process data.
-    # The implementation here is dependent on the processing of at least one of the main variables.
-    # It also depends on the presence of hurs & tas
-    if "vpd" in enable and len(enable) > 1:
-        assert "tas" in enable and "hurs" in enable, "Need hurs and tas to calculate vpd"
-        make_vpd(lat, lon, names, metadata, tm, crs)
+    # Calculate VPD if requested (now independent)
+    if "vpd" in enable:
+        make_vpd()
+
 
 if __name__ == "__main__":
-    main()
+    a = main()
+    pass

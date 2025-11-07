@@ -8,10 +8,12 @@ from copy import deepcopy
 from netCDF4 import Dataset
 from numpy import arange, ma, zeros, full, hstack, concatenate, meshgrid, exp, array
 from numpy import float32 as flt
+import numpy as np
 
 
 """
-    Subsets ISIMIP netCDF4 input files & Generate netCDF files with reduced grids (time,gridcell) and gridlists
+    Subsets ISIMIP netCDF4 input files & Generate netCDF files with
+    station-based observational layout (time,gridcell) and gridlists
     for LPJ-GUESS experiments. For the bbox selection look at the definition of
     upper left corner and lower right corner: goto LINE 105
 
@@ -23,13 +25,27 @@ $ python ./prepocess_lpjginput.py <region> [optional <plot>]
   Look the README.txt
 """
 # Folder containing the ISIMIP netCDF data files (all variables in the same folder)
-WATCH_WFDEI_DATA = Path("../../CAETE-DVM/input/20CRv3-ERA5/obsclim_raw/")
+# This script does not check for data consistency among variables!
+# It assumes that all files are present and both with the same time and space coverage
 
+ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/20CRv3-ERA5/spinclim_raw/")
+DATASET = "20CRv3-ERA5_spinclim"
 FILE_EXT = "nc"
-ROOT = Path(os.getcwd())
-DATASET = "20CRv3-ERA5_obsclim"
-TSPAN = "1901-2024"
+TSPAN = "1801-1900"
+
+# ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/20CRv3-ERA5/obsclim_raw/")
+# DATASET = "20CRv3-ERA5_obsclim"
+# FILE_EXT = "nc"
+# TSPAN = "1901-2024"
+
+# dataset name to append to output files
 REFERENCES = f"{DATASET} (isi-mip@pik-potsdam.de) - {TSPAN}. Adapted to LPJ-GUESS"
+ROOT = Path(os.getcwd())
+
+# Path to your land mask file (360x720 array)
+LAND_MASK_FILE = Path("./mask_raisg-360-720.npy")  # Update this path
+USE_EXTERNAL_MASK = True  # Set to True to use external mask
+
 
 
 guess_var_mtdt= {'tas':  ["K", 'air_temperature'],
@@ -143,6 +159,37 @@ else:
     ys, xs = calc_dim(y0, y1, x0, x1)
     print(f"WTF is {reg}?")
     reg = "sa"
+
+# TODO: Test the match case structure (Python 3.10+)
+# # find_coord signature: (Latitude, Longitude) [in decimal degrees, GRS - Lat/Long] ---LOOK the README.txt file
+# match reg:
+#     case "sa":
+#         y0, x0 = find_coord(12, -86)  # upper left corner
+#         y1, x1 = find_coord(-20, -35)  # lower right corner
+#         ys, xs = calc_dim(y0, y1, x0, x1)
+#     case "af":
+#         y0, x0 = find_coord(12, -20)  # upper left corner
+#         y1, x1 = find_coord(-20, 52)  # lower right corner
+#         ys, xs = calc_dim(y0, y1, x0, x1)
+#     case "as":
+#         y0, x0 = find_coord(12, 90)  # upper left corner
+#         y1, x1 = find_coord(-20, 155)  # lower right corner
+#         ys, xs = calc_dim(y0, y1, x0, x1)
+#     case "eu":
+#         y0, x0 = find_coord(72, -12)  # upper left corner
+#         y1, x1 = find_coord(33, 33)  # lower right corner
+#         ys, xs = calc_dim(y0, y1, x0, x1)
+#     case "global":
+#         y0, x0 = find_coord(90, -180)  # upper left corner
+#         y1, x1 = find_coord(-90, 180)  # lower right corner
+#         ys, xs = calc_dim(y0, y1, x0, x1)
+#     case _:
+#         # Default case (equivalent to else)
+#         y0, x0 = find_coord(12, -86)  # upper left corner
+#         y1, x1 = find_coord(-20, -35)  # lower right corner
+#         ys, xs = calc_dim(y0, y1, x0, x1)
+#         print(f"WTF is {reg}?")
+#         reg = "sa"
 
 def Vsat_slope(Tair:array,method=3, esat=True)->array:
 # Translated to python from the bigleaf R package
@@ -275,6 +322,43 @@ def read_data(dset:Path, var:str)->ma.MaskedArray: # type: ignore
         for i in range(tsize):
             yield variable[i, y0:y1, x0:x1]
 
+def load_mask(mask_file: Path, y0: int, y1: int, x0: int, x1: int) -> np.ndarray:
+    """
+    Load external region mask and crop to the specified region
+
+    Args:
+        mask_file: Path to the .npy file containing mask (360x720)
+        y0, y1, x0, x1: Bounding box indices for cropping
+
+    Returns:
+        Cropped mask where True = exclude, False = include (True for masked areas)
+    """
+    if not mask_file.exists():
+        print(f"Warning: mask file {mask_file} not found. Using original masking method.")
+        return None
+
+    try:
+        # Load the full mask (assuming 360x720: lat x lon)
+        full_mask = np.load(mask_file)
+        print(f"Loaded external mask with shape: {full_mask.shape}")
+
+        # Crop to the specified region
+        cropped_mask = full_mask[y0:y1, x0:x1]
+        print(f"Cropped mask to region with shape: {cropped_mask.shape}")
+
+        # Convert to boolean if needed
+        if cropped_mask.dtype != bool:
+            cropped_mask = cropped_mask.astype(bool)
+
+        # Your mask: True = masked (exclude), False = unmasked (include Amazon)
+        # Script expects: True = exclude, False = include
+        # So we can use your mask directly without inversion
+        return cropped_mask
+
+    except Exception as e:
+        print(f"Error loading Amazon mask: {e}")
+        return None
+
 def crop_rect(var_dir:Path, var:str):
 
     time_data = []
@@ -306,19 +390,37 @@ def crop_rect(var_dir:Path, var:str):
 
     return concatenate(tuple(variable_data), axis=0,), mtdt, tm, crs
 
-def process_var(var_dir:Path, var:str):
+def process_var(var_dir: Path, var: str):
     """From the set of input ISI-MIP files, create the elements for the final datasets.
     Arguments: var_dir -> path to the folder containing the nc4 files of the variable var)
     """
     # It means crop rectangle but do other things also
     dt, mt, tm, crs = crop_rect(var_dir, var)
 
-    tdim = dt.shape[0] # get time dimension length
-    # the standard fill value of the watch+wfdei from ISI-MIP2 is 1e+20
+    tdim = dt.shape[0]  # get time dimension length
+
+    # Load external mask if available
+    if USE_EXTERNAL_MASK and LAND_MASK_FILE.exists():
+        valid_mask = load_mask(LAND_MASK_FILE, y0, y1, x0, x1)
+        if valid_mask is not None:
+            # Use mask directly (True = exclude, False = include areas)
+            mask = valid_mask
+            valid_grid_points = np.sum(~mask)  # Count of used areas (False values)
+            excluded_points = np.sum(mask)  # Count of excluded areas (True values)
+            print(f"Using external mask.  Points: {valid_grid_points}, Excluded points: {excluded_points}")
+        else:
+            # Fallback to original method
+            mask = dt[0, :, :] > 9.9e19
+            print("Using original fill-value based masking")
+    else:
+        # Original method: the standard fill value of the watch+wfdei from ISI-MIP2 is 1e+20
+        mask = dt[0, :, :] > 9.9e19
+        print("Using original fill-value based masking")
+
     # Note that the creation of this mask need to be correct for the lat lon merging process
-    mask = dt[0,:,:] > 9.9e19
-    # station dimension for the input files
+    # station dimension for the input files (count points - where mask is False)
     station_dim = (mask == False).sum()
+    print(f"Total stations: {station_dim}")
 
     # allocate some space
     lats_idx = zeros(shape=(station_dim), dtype=flt)
@@ -339,7 +441,7 @@ def process_var(var_dir:Path, var:str):
             # ny, nx = find_coord(lat, lon)
             # print(i, j, ny - y0, nx - x0, mask[i, j], yv[i, j], xv[i, j])
 
-            # Filter land grid points
+            # Filter Amazon grid points (mask[i,j] = False means include Amazon area)
             if not mask[i, j]:
                 lat = yv[i, j]
                 lon = xv[i, j]
@@ -350,21 +452,29 @@ def process_var(var_dir:Path, var:str):
                 out[counter, :] = dt[:, i, j]
                 counter += 1
 
+    print(f"Processed {counter} stations")
     return lats_idx, lons_idx, station_names, out, mt, tm, crs
 
-def write_gridlist(fname, lat, lon, name):
+def write_gridlist(fname, lat, lon, name, cf=True):
     # When writing from windows the line ending is \n (Automatic trasform to \r\n)
     endline = "\r\n"
     if platform.system() == "Linux":
         pass
     elif platform.system() == "Windows":
         endline = "\n"
-    fnm = "_".join(fname.split("_")[1:])
-    # print(platform.system())
+
+    if cf:
+        fnm = "_".join(fname.split("_")[1:]) + "_CF"
+    else:
+        fnm = "_".join(fname.split("_")[1:]) + "_lonlat"
+
     with open(f"gridlist_{fnm}.txt", 'w', encoding="utf-8") as fh:
         for i in range(name.size):
             nm = name[i].strip()
-            fh.write(f"{str(round(lon[i], 2))}\t{str(round(lat[i], 2))}\t{nm}{endline}")
+            if not cf:
+                fh.write(f"{str(round(lon[i], 2))}\t{str(round(lat[i], 2))}\t{nm}{endline}")
+            else:
+                fh.write(f"{i}\t{nm}{endline}")
 
 def write_files(fname = None,
                var=None,
@@ -380,6 +490,8 @@ def write_files(fname = None,
     if fname is not None:
         dset = Dataset(os.path.join(Path('./'), fname + ".nc"), mode="w", format="NETCDF4")
 
+    # Transpose array to have (time, station)
+    # We want time as the first dimension to enable concatenation in time
     arr = arr_in.T
     # Create netCDF dimensions
     dset.createDimension("station",size=arr.shape[1])
@@ -399,7 +511,7 @@ def write_files(fname = None,
     Y =  dset.createVariable("lat", 'f4', ("station",), fill_value=metadata["missing_value"])
     SN = dset.createVariable("station_name", '<U6', ("station", ),fill_value="station_y-x")
     T  = dset.createVariable("time", 'f4', ("time",), fill_value=metadata["missing_value"])
-    D  = dset.createVariable(var, 'f4', ("time", "station"), fill_value=1e+20, chunksizes=(time["ndays"], 128))
+    D  = dset.createVariable(var, 'f4', ("time", "station"), fill_value=1e+20, chunksizes=(time["ndays"], 1))
 
     # transpose to time, station. We want time as the first dimension to enable concatenation in time
     # Assign data to variables & add attributes
@@ -442,28 +554,6 @@ def write_files(fname = None,
     dset.close()
 
     return fname, lat, lon, names
-
-def make_vpd_old(lat, lon, names, metadata, tm, crs):
-
-    ptas = Path(f"./tas_{reg}_{DATASET}.nc").resolve()
-    phurs  = Path(f"./hurs_{reg}_{DATASET}.nc").resolve()
-
-    with Dataset(ptas,  "r")  as tasfh, Dataset(phurs, "r") as hursfh:
-        tas_arr = tasfh.variables["tas"][...].data # K
-        hurs_arr = hursfh.variables["hurs"][...].data # %
-
-    vpd = VPD(tas_arr, hurs_arr)
-
-    mtdt = deepcopy(metadata)
-    mtdt["units"] = guess_var_mtdt["vpd"][0]
-    mtdt["std_name"] = guess_var_mtdt["vpd"][1]
-    mtdt["long_name"] = "Vapor Pressure Deficit"
-
-    # call write NC
-    write_files(fname=f"vpd_{reg}_{DATASET}", var="vpd", arr=vpd, metadata=mtdt,
-                time=tm, crs=crs, lat=lat, lon=lon,
-                names=names, reference=REFERENCES)
-    return None
 
 def make_vpd():
     """Calculate VPD from existing tas and hurs files"""
@@ -536,7 +626,7 @@ def make_vpd():
     return None
 
 def main():
-    folder_data = WATCH_WFDEI_DATA.resolve()
+    folder_data = ISIMIP_DATA_PATH.resolve()
     GRDFLAG = False
     vrs = ["hurs", "pr", "rsds", "ps", "tas", "sfcwind"]
     enable = ["hurs", "pr", "rsds", "ps", "tas", "sfcwind", "vpd"]
@@ -553,14 +643,15 @@ def main():
             if not GRDFLAG:
                 GRDFLAG = True
                 write_gridlist(*grdlst_data)
+                write_gridlist(*grdlst_data, cf=False)
         else:
             pass
 
-    # Calculate VPD if requested (now independent)
+    # Calculate VPD if requested
     if "vpd" in enable:
         make_vpd()
 
 
 if __name__ == "__main__":
-    a = main()
+    main()
     pass

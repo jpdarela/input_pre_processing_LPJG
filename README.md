@@ -1,6 +1,6 @@
 # Preprocessing tool
 
-Transform netCDF4 files (dimensions and attributes) to use with LPJ-GUESS.
+Transform netCDF4 files (dimensions and attributes) from **ISIMIP** format (gridded climate time series in rectilinear latitude–longitude format) to a **station-based observational layout** to use with LPJ-GUESS.
 
 It only works with ISIMIP input files: [ISIMIP Repository](https://data.isimip.org/search/tree/ISIMIP2a/InputData/climate/atmosphere/watch-wfdei/)
 

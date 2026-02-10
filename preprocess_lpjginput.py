@@ -6,14 +6,14 @@ import platform
 
 from copy import deepcopy
 from netCDF4 import Dataset
-from numpy import arange, ma, zeros, full, hstack, concatenate, meshgrid, exp, array
+from numpy import ma, arange, full, hstack, concatenate, meshgrid, exp, zeros, array
 from numpy import float32 as flt
 import numpy as np
 
 
 """
     Subsets ISIMIP netCDF4 input files & Generate netCDF files with
-    station-based observational layout (time,gridcell) and gridlists
+    station-based observational layout (time,gridcell) with chunking (time, 1) and gridlists
     for LPJ-GUESS experiments. For the bbox selection look at the definition of
     upper left corner and lower right corner: goto LINE 105
 
@@ -24,19 +24,34 @@ $ python ./prepocess_lpjginput.py <region> [optional <plot>]
   <plot> : 0 | 1
   Look the README.txt
 """
-# Folder containing the ISIMIP netCDF data files (all variables in the same folder)
-# This script does not check for data consistency among variables!
-# It assumes that all files are present and both with the same time and space coverage
+# Folders containing the ISIMIP netCDF data files (all variables in the same folder)
+# This script does not check for data consistency in the time dimension.
+# It assumes that all files are both present and fit to merge in time without gaps or overlaps.
 
-ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/20CRv3-ERA5/spinclim_raw/")
-DATASET = "20CRv3-ERA5_spinclim"
-FILE_EXT = "nc"
-TSPAN = "1801-1900"
+# ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/20CRv3-ERA5/spinclim_raw/")
+# DATASET = "20CRv3-ERA5_spinclim"
+# FILE_EXT = "nc"
+# TSPAN = "1801-1900"
 
 # ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/20CRv3-ERA5/obsclim_raw/")
 # DATASET = "20CRv3-ERA5_obsclim"
 # FILE_EXT = "nc"
 # TSPAN = "1901-2024"
+
+# ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/MPI-ESM1-2-HR/historical_raw/")
+# DATASET = "MPI-ESM1-2-HR_historical"
+# FILE_EXT = "nc"
+# TSPAN = "1851-2014"
+
+# ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/MPI-ESM1-2-HR/ssp370_raw/")
+# DATASET = "MPI-ESM1-2-HR_ssp370"
+# FILE_EXT = "nc"
+# TSPAN = "2015-2100"
+
+ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/MPI-ESM1-2-HR/ssp585_raw/")
+DATASET = "MPI-ESM1-2-HR_ssp585"
+FILE_EXT = "nc"
+TSPAN = "2015-2100"
 
 # dataset name to append to output files
 REFERENCES = f"{DATASET} (isi-mip@pik-potsdam.de) - {TSPAN}. Adapted to LPJ-GUESS"
@@ -491,7 +506,7 @@ def write_files(fname = None,
         dset = Dataset(os.path.join(Path('./'), fname + ".nc"), mode="w", format="NETCDF4")
 
     # Transpose array to have (time, station)
-    # We want time as the first dimension to enable concatenation in time
+    # We want time as the first dimension to enable concatenation in time (The output files are not fit to CDO)
     arr = arr_in.T
     # Create netCDF dimensions
     dset.createDimension("station",size=arr.shape[1])

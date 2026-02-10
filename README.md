@@ -2,19 +2,15 @@
 
 Transform netCDF4 files (dimensions and attributes) from **ISIMIP** format (gridded climate time series in rectilinear latitude–longitude format) to a **station-based observational layout** to use with LPJ-GUESS.
 
-It only works with ISIMIP input files: [ISIMIP Repository](https://data.isimip.org/search/tree/ISIMIP2a/InputData/climate/atmosphere/watch-wfdei/)
-
-TODO: add functionality for other input datasets.
+Works with ISIMIP input files
 
 Look at the scripts [preprocess.bat](./preprocess.bat) and [preprocess.sh](./preprocess.sh)
 
 USE:
 
-`$ python ./prepocess_lpjginput.py <region> [optional <plot>]`
+`$ python ./prepocess_lpjginput.py <region>`
 
   `<region> : sa | af | as | eu`
-
-  `<plot> : 0 | 1`
 
 sa = South America
 
@@ -24,17 +20,15 @@ as = Southeast Asia
 
 eu = Europe
 
-The plot option uses matplolib imshow to plot one layer of the original data (To check the extent)
-
 There is also the global option. It requires a lot of memory to run.
 
 ## Outputs
 
 NetCD4 files are named as:
-<variable_name>_`<region>`_1979_2016_watch-wfdei.nc
+<variable_name>_`<region>`_dataset_name.nc
 
 Gridlist files are named as:
-gridlist_`<region>`.txt
+gridlist_`<region>`_dataset_name-gridlist_type.txt
 
 WHERE:
 

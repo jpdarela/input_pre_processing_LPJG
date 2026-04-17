@@ -5,15 +5,15 @@ import platform
 
 
 from copy import deepcopy
-from netCDF4 import Dataset
-from numpy import ma, arange, full, hstack, concatenate, meshgrid, exp, zeros, array
+from netCDF4 import Dataset, MFDataset, MFTime
+from numpy import ma, arange, full, meshgrid, exp, zeros, array
 from numpy import float32 as flt
 import numpy as np
 
 
 """
     Subsets ISIMIP netCDF4 input files & Generate netCDF files with
-    station-based observational layout (time,gridcell) with chunking (time, 1) and gridlists
+    station-based observational layout (time,gridcell).T with chunking (time, 1).T and gridlists
     for LPJ-GUESS experiments. For the bbox selection look at the definition of
     upper left corner and lower right corner: goto LINE 105
 
@@ -28,10 +28,10 @@ $ python ./prepocess_lpjginput.py <region> [optional <plot>]
 # This script does not check for data consistency in the time dimension.
 # It assumes that all files are both present and fit to merge in time without gaps or overlaps.
 
-# ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/20CRv3-ERA5/spinclim_raw/")
-# DATASET = "20CRv3-ERA5_spinclim"
-# FILE_EXT = "nc"
-# TSPAN = "1801-1900"
+ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/20CRv3-ERA5/spinclim_raw/")
+DATASET = "20CRv3-ERA5_spinclim"
+FILE_EXT = "nc"
+TSPAN = "1801-1900"
 
 # ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/20CRv3-ERA5/obsclim_raw/")
 # DATASET = "20CRv3-ERA5_obsclim"
@@ -48,10 +48,10 @@ $ python ./prepocess_lpjginput.py <region> [optional <plot>]
 # FILE_EXT = "nc"
 # TSPAN = "2015-2100"
 
-ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/MPI-ESM1-2-HR/ssp585_raw/")
-DATASET = "MPI-ESM1-2-HR_ssp585"
-FILE_EXT = "nc"
-TSPAN = "2015-2100"
+# ISIMIP_DATA_PATH = Path("../../CAETE-DVM/input/MPI-ESM1-2-HR/ssp585_raw/")
+# DATASET = "MPI-ESM1-2-HR_ssp585"
+# FILE_EXT = "nc"
+# TSPAN = "2015-2100"
 
 # dataset name to append to output files
 REFERENCES = f"{DATASET} (isi-mip@pik-potsdam.de) - {TSPAN}. Adapted to LPJ-GUESS"
@@ -376,34 +376,44 @@ def load_mask(mask_file: Path, y0: int, y1: int, x0: int, x1: int) -> np.ndarray
 
 def crop_rect(var_dir:Path, var:str):
 
-    time_data = []
-    variable_data = []
     dt = list_files(var_dir, FILE_EXT, "_" + var + "_")
-    # return dt
 
     mtdt = get_metadata(dt[0], var)
-    # return dt, mtdt
     crs = get_crs(dt[0])
 
-    print(f"\n\tCollecting files at {dt[0].parent}", end="\n\n")
-    for i, fpath in enumerate(dt):
-        tm = get_nctime(fpath)
-        time_data.append(tm["time"])
-        data = zeros(shape=(tm["ndays"], ys, xs))
-        print(f"File {i + 1}", fpath.name)
-        ds = read_data(fpath, var)
-        for j, layer in enumerate(ds):
-            data[j,:,:] = layer
-            print(f"\rExtracting layer {j + 1}", end="", flush=True)
-        print("\r", end="", flush=True)
-        variable_data.append(data)
-    print("\rDONE", end=" "*100)
-    print("")
+    # Use MFDataset + MFTime to handle files with different time reference epochs.
+    # MFTime normalises all time values to the first file's "days since ..." reference.
+    file_strs = [str(f) for f in dt]
+    print(f"\n\tOpening {len(file_strs)} files with MFDataset at {dt[0].parent}", end="\n\n")
+    mfds = MFDataset(file_strs)
+    mftime = MFTime(mfds.variables['time'])
 
-    tm["time"] = hstack(tuple(time_data))
+    # Build unified time dict from the normalised MFTime
+    tm = {}
+    tm["time"] = np.array(mftime[:], dtype=np.float64)
     tm["ndays"] = tm["time"].size
+    tm["units"] = mftime.units       # reference from the first file
+    tm["calendar"] = mftime.calendar
+    tm["axis"] = u"T"
+    tm["fill_value"] = getattr(mftime, '_FillValue', 1e+20)
 
-    return concatenate(tuple(variable_data), axis=0,), mtdt, tm, crs
+    print(f"  MFTime unified: {tm['ndays']} timesteps, units='{tm['units']}', calendar='{tm['calendar']}'")
+
+    # Read the variable data with spatial subsetting
+    mfvar = mfds.variables[var]
+    total_t = mfvar.shape[0]
+    print(f"  Reading {var} ({total_t}, {ys}, {xs}) ...")
+    variable_data = zeros(shape=(total_t, ys, xs), dtype=flt)
+    # Read in chunks to manage memory and show progress
+    CHUNK = 1000
+    for start in range(0, total_t, CHUNK):
+        end = min(start + CHUNK, total_t)
+        variable_data[start:end, :, :] = mfvar[start:end, y0:y1, x0:x1]
+        print(f"\r  Read timesteps {start+1}-{end}/{total_t}", end="", flush=True)
+    print("\rDONE" + " " * 60)
+
+    mfds.close()
+    return variable_data, mtdt, tm, crs
 
 def process_var(var_dir: Path, var: str):
     """From the set of input ISI-MIP files, create the elements for the final datasets.
